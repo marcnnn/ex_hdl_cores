@@ -9,6 +9,7 @@ defmodule ExHdlCores do
     * `ExHdlCores.CRC` - any polynomial, N bytes per cycle, `tkeep`
     * `ExHdlCores.Checksum` - Internet checksum adder tree
     * `ExHdlCores.Scrambler` - scramblers and PRBS generators
+    * `ExHdlCores.ByteShift` - byte-lane shifter by runtime offset
     * `ExHdlCores.FIFO` - synchronous, asynchronous, AXI4-Stream, packet FIFOs
     * `ExHdlCores.AXIS` - skid buffer, width converters, merge, packet mux, broadcast, demux
     * `ExHdlCores.AXIL` - AXI4-Lite to cfg bus bridge, 1-to-N interconnect
