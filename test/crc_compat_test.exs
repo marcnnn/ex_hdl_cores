@@ -5,9 +5,9 @@ defmodule ExHdlCores.CRCCompatTest do
   of ex_net's own test (reflected register, init 0xFFFFFFFF, outputs show
   the register one cycle after the word), written here independently.
   """
-  # Verilator builds of the 64-bit CRC take over a minute on a loaded host.
-  @moduletag timeout: 600_000
   use ExUnit.Case, async: true
+  # Verilator builds of the 64-bit CRC can take over a minute on a loaded host.
+  @moduletag timeout: 600_000
   use ExUnitProperties
 
   import Bitwise
