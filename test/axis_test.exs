@@ -297,6 +297,101 @@ defmodule ExHdlCores.AXISTest do
     end
   end
 
+  describe "packet_mux" do
+    property "whole packets, per-source order, source tag and done pulses" do
+      check all(
+              n <- integer(1..5),
+              arbiter <- member_of([:round_robin, :fixed]),
+              register <- boolean(),
+              inputs <- list_of(packets_gen(4), length: n),
+              {vp, rp, seed} <- rates(),
+              max_runs: 40
+            ) do
+        mod = AXIS.packet_mux(n, data: 32, user: 3, arbiter: arbiter, register: register)
+        ins = for {pk, i} <- Enum.with_index(inputs), do: tagged(pk, i)
+
+        feed =
+          for {pk, i} <- Enum.with_index(ins),
+              into: %{},
+              do: {:"s#{i}_axis", Enum.flat_map(pk, &Tb.beats(&1, 4, %{tuser: i}))}
+
+        r =
+          Tb.drive(reset(mod),
+            inputs: feed,
+            outputs: [:m_axis],
+            valid: vp,
+            ready: rp,
+            seed: seed,
+            fields: [:tdata, :tkeep, :tlast, :tuser],
+            out_fields: [:tdata, :tkeep, :tlast, :tuser, :src],
+            watch: for(i <- 0..(n - 1), do: {:done, i})
+          )
+
+        out = Tb.packets(r.out.m_axis, 4)
+        assert Enum.sort(out) == Enum.sort(List.flatten(ins))
+        for pk <- ins, do: assert(Enum.filter(out, &(&1 in pk)) == pk)
+
+        # every beat carries its source: in src and in the passed-through tuser
+        for b <- r.out.m_axis, do: assert(b.src == b.tuser)
+        first = for b <- r.out.m_axis, do: b.src
+        assert length(first) == length(r.out.m_axis)
+
+        # source of each packet is the tag in its first payload byte
+        {_, tags} =
+          Enum.reduce(r.out.m_axis, {true, []}, fn b, {start, acc} ->
+            acc = if start, do: [{b.src, <<b.tdata::little-8>>} | acc], else: acc
+            {b.tlast == 1, acc}
+          end)
+
+        for {src, <<tag>>} <- tags, do: assert(src == tag)
+
+        for {pk, i} <- Enum.with_index(ins), do: assert(r.watched[{:done, i}] == length(pk))
+      end
+    end
+
+    test "fixed priority: requester 0 first, the second packet waits" do
+      mod = AXIS.packet_mux(2, data: 8, arbiter: :fixed)
+
+      r =
+        Tb.drive(reset(mod),
+          inputs: %{s0_axis: Tb.beats("abcd", 1), s1_axis: Tb.beats("wxyz", 1)},
+          outputs: [:m_axis],
+          valid: 100,
+          ready: 100,
+          out_fields: [:tdata, :tkeep, :tlast, :src]
+        )
+
+      assert Tb.packets(r.out.m_axis, 1) == ["abcd", "wxyz"]
+      assert Enum.map(r.out.m_axis, & &1.src) == [0, 0, 0, 0, 1, 1, 1, 1]
+    end
+
+    test "src: false drops the port, done still pulses" do
+      mod = AXIS.packet_mux(2, data: 8, keep_bits: 1, src: false)
+      refute Enum.any?(mod.ports, &(&1.name == :m_axis_src))
+
+      r =
+        Tb.drive(reset(mod),
+          inputs: %{s0_axis: Tb.beats("ab", 1), s1_axis: Tb.beats("cd", 1)},
+          outputs: [:m_axis],
+          valid: 100,
+          ready: 100,
+          watch: [{:done, 0}, {:done, 1}]
+        )
+
+      assert Tb.packets(r.out.m_axis, 1) |> Enum.sort() == ["ab", "cd"]
+      assert {r.watched[{:done, 0}], r.watched[{:done, 1}]} == {1, 1}
+    end
+
+    test "keep_bits sets the width of tkeep (one bit per DWord)" do
+      iface = AXIS.iface(data: 256, keep_bits: 8, user: 4)
+      assert {:u, 8} == iface.fields |> List.keyfind(:tkeep, 0) |> elem(1)
+    end
+
+    test "requires tlast" do
+      assert_raise ArgumentError, fn -> AXIS.packet_mux(2, last: false) end
+    end
+  end
+
   describe "broadcast" do
     property "every output sees every packet" do
       check all(
@@ -407,6 +502,8 @@ defmodule ExHdlCores.AXISTest do
         AXIS.upsize(in_bytes: 2, out_bytes: 6, user: 2, id: 2),
         AXIS.downsize(in_bytes: 6, out_bytes: 2, user: 2),
         AXIS.merge(3, data: 16),
+        AXIS.packet_mux(3, data: 16, user: 2),
+        AXIS.packet_mux(2, data: 8, register: false),
         AXIS.merge(2, data: 8, packet: false, arbiter: :fixed),
         AXIS.broadcast(3, data: 16),
         AXIS.demux(3, data: 16, dest: 2)

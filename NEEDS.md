@@ -80,3 +80,27 @@ outputs (`ports: []`) and by omitting FIFO count outputs when unused.
 * A module without any register has no `clk`/`rst_n` ports, so
   `Sim.reset/2` and test benches that always poke `rst_n` need a special
   case for combinational modules (the arbiters).
+
+## 4. Found while writing the AXI4-Lite blocks, checksum and packet mux
+
+* `==` and `!=` are hardware operators inside `module/3` like `if`, so a
+  generator that tests an optional handle (`if acc == nil`) fails with
+  `not a hardware expression: nil`. Use `is_nil/1` or `case`. The message
+  could say that `==` is the hardware comparison here.
+
+      module "m" do
+        a = input(:a, 1)
+        y = output(:y, 1)
+        x = a                              # a handle that may also be nil in generator code
+        if x == nil, do: y <~ a, else: y <~ 0   # WidthError: not a hardware expression: nil
+      end
+
+* `mux/2` (hardware) is imported by `use ExHdl.RTL`, so a library cannot
+  name a public block `mux/2`; `ExHdlCores.AXIS.packet_mux/2` is spelled
+  that way for this reason (same family as the `sync` point above).
+* Forwarding every data port of an instance to a top-level port (a top
+  that hosts a user-supplied slave module) is a hand-written loop over
+  `mod.ports`; instance ports being wires `<inst>_<port>` means the
+  instance name must not equal the prefix of the re-exported ports
+  (`output(:x_y, 1) <~ i.y` for instance `x` raises `x_y is declared
+  twice`). An `expose/2` helper would remove both.

@@ -19,16 +19,39 @@ defmodule ExHdlCores.AXIS do
       payload stable until `tready`.
 
   Blocks: `skid/1`, `upsize/1`, `downsize/1`, `convert/1`, `merge/2`,
-  `broadcast/2`, `demux/2` and, in `ExHdlCores.FIFO`, the stream FIFOs.
+  `packet_mux/2`, `broadcast/2`, `demux/2` and, in `ExHdlCores.FIFO`, the stream FIFOs.
   """
   use ExHdl.RTL
   alias ExHdl.RTL.{Builder, Interface}
   alias ExHdlCores.Arbiter
 
-  @shape [:data, :keep, :last, :id, :dest, :user]
+  @shape [:data, :keep, :keep_bits, :last, :id, :dest, :user]
 
-  @doc "The stream interface for shape options (see the moduledoc)."
-  def iface(opts \\ []), do: opts |> Keyword.take(@shape) |> Interface.axi_stream()
+  @doc """
+  The stream interface for shape options (see the moduledoc). `keep_bits:`
+  overrides the width of `tkeep` (one bit per DWord on a PCIe stream:
+  `data: 256, keep_bits: 8`); only blocks that carry `tkeep` along without
+  interpreting it (`skid/1` with `kind:`, the FIFOs, `merge/2`,
+  `packet_mux/2`, `broadcast/2`, `demux/2`) accept it.
+  """
+  def iface(opts \\ []) do
+    base = opts |> Keyword.take(@shape -- [:keep_bits]) |> Interface.axi_stream()
+
+    case Keyword.get(opts, :keep_bits) do
+      nil ->
+        base
+
+      k ->
+        %{
+          base
+          | fields:
+              for(
+                {f, t, d} <- base.fields,
+                do: if(f == :tkeep, do: {f, {:u, k}, d}, else: {f, t, d})
+              )
+        }
+    end
+  end
 
   @doc "Shape options contained in `opts`."
   def shape(opts), do: Keyword.take(opts, @shape)
@@ -366,6 +389,106 @@ defmodule ExHdlCores.AXIS do
       for {s, i} <- Enum.with_index(ss), do: s.tready <~ (g[i] and m.tready)
       moved = wire(:moved, sel_valid and m.tready)
       a.adv <~ if(packet and iface_last?(iface), do: moved and m.tlast, else: moved)
+    end
+  end
+
+  @doc """
+  Packet multiplexer for `n` requesters sharing one stream (the request
+  channel of a PCIe core, a DMA port): `s0_axis` ... `s<n-1>_axis` in,
+  `m_axis` out. Like `merge/2` in packet mode, plus what the requesters
+  need back:
+
+    * `m_axis_src` - index of the requester the beat on `m_axis` came from
+    * `done` (n bits) - bit `i` pulses in the cycle the last beat of a
+      packet from requester `i` is transferred on `m_axis`
+
+  Once a packet has started it is forwarded to its `tlast`; between
+  packets requesters take turns (`arbiter: :round_robin`, default) or
+  requester 0 wins (`:fixed`). Options: shape (`last` is required),
+  `arbiter:`, `src:` (default true; false omits the `m_axis_src` port, an
+  unread output of an instance does not lint), `register:` (default true: a skid buffer on the output so
+  the grant does not depend combinationally on `m_axis_tready`; false:
+  none, `s*_axis_tready` follows `m_axis_tready`).
+
+  `ExPcie.RTL.RqMux` is `packet_mux(2, data: 256, keep_bits: 8, user: 62)` with
+  `done[1]` as its `b_done`.
+  """
+  def packet_mux(n, opts \\ []) when n >= 1 do
+    iface = iface(opts)
+    kind = Keyword.get(opts, :arbiter, :round_robin)
+    register = Keyword.get(opts, :register, true)
+    src? = Keyword.get(opts, :src, true)
+    unless iface_last?(iface), do: raise(ArgumentError, "mux works on packets: needs tlast")
+    payload = payload(iface)
+    uw = Keyword.get(opts, :user, 0)
+    iw = max(Builder.ceil_log2(n), 1)
+    ports = [:idx]
+
+    arb =
+      if kind == :fixed,
+        do: Arbiter.fixed(n, hold: :packet, ports: ports),
+        else: Arbiter.round_robin(n, hold: :packet, ports: ports)
+
+    # the source index travels through the register slice in the top bits of tuser
+    sk = skid(Keyword.put(shape(opts), :user, uw + iw))
+
+    module "axis_packet_mux#{n}_#{kind}#{if register, do: "_reg", else: ""}#{if src?, do: "", else: "_nosrc"}_#{tag(iface)}" do
+      ss = for i <- 0..(n - 1), do: slave(port("s", i), iface)
+      m = master(:m_axis, iface)
+      src_o = if src?, do: output(:m_axis_src, iw)
+      src = wire(:src_w, iw)
+      done = output(:done, n)
+      a = instance(:arb, arb)
+      a.req <~ cat(for s <- Enum.reverse(ss), do: s.tvalid)
+      g = a.grant
+
+      sel =
+        for {f, {_, w}} <- payload, into: %{} do
+          {f,
+           Enum.reduce(Enum.with_index(ss), nil, fn {s, i}, acc ->
+             term = s[f] &&& rep(g[i], w)
+             if is_nil(acc), do: term, else: acc ||| term
+           end)}
+        end
+
+      sel_valid =
+        wire(:sel_valid, reduce_or(a.grant &&& cat(for s <- Enum.reverse(ss), do: s.tvalid)))
+
+      out_ready =
+        if register do
+          k = instance(:sk, sk)
+          k.s_axis.tvalid <~ sel_valid
+
+          for {f, _} <- payload, f != :tuser, do: k.s_axis[f] <~ sel[f]
+
+          k.s_axis.tuser <~ if(uw > 0, do: cat([a.idx, sel.tuser]), else: a.idx)
+
+          k.m_axis.tready <~ m.tready
+          m.tvalid <~ k.m_axis.tvalid
+
+          for {f, _} <- payload, f != :tuser, do: m[f] <~ k.m_axis[f]
+
+          if uw > 0, do: m.tuser <~ k.m_axis.tuser[0..(uw - 1)]
+          src <~ k.m_axis.tuser[uw..(uw + iw - 1)]
+          k.s_axis.tready
+        else
+          m.tvalid <~ sel_valid
+          for {f, _} <- payload, do: m[f] <~ sel[f]
+          src <~ a.idx
+          m.tready
+        end
+
+      for {s, i} <- Enum.with_index(ss), do: s.tready <~ (g[i] and out_ready)
+      moved = wire(:moved, sel_valid and out_ready)
+      a.adv <~ (moved and sel.tlast)
+
+      case src_o do
+        nil -> nil
+        o -> o <~ src
+      end
+
+      fin = wire(:fin, m.tvalid and m.tready and m.tlast)
+      done <~ cat(for i <- (n - 1)..0//-1, do: fin and src == i)
     end
   end
 

@@ -21,6 +21,25 @@ defmodule ExHdlCores.CRC do
     * `crc` - output, the CRC of all bytes since the last clear
       (reflection and final XOR applied), valid the cycle after the word
 
+  Options for replacing hand-written CRCs (`build/2`): `clear_port:`
+  renames `clear`, `state: true` adds the `state` output (the register in
+  reflected notation when `refout`, before the final XOR), `residue:`
+  (`true` or an integer) adds `ok`, high while `state` equals the residue
+  of "message followed by its CRC" (`residue/1`), and `zero_keep:
+  :one_byte` makes an all-zero `keep` with `valid` count as one byte
+  instead of being ignored.
+
+  Ethernet FCS as ex_net's `ExNet.RTL.CRC32.build(8)` (module `crc32_64`,
+  inputs `data`, `keep`, `valid`, `init`, outputs `state`, `crc`, `ok`):
+
+      CRC.build(:crc32, bytes: 8, clear_port: :init, state: true, residue: true,
+                zero_keep: :one_byte, name: "crc32_64")
+
+  `CRC.build(:crc32, bytes: 1, clear_port: :init, state: true, residue:
+  true, name: "crc32_8")` is the 1 byte version (no `keep` port).
+  `crc` is the complemented reflected register, i.e. the CRC-32 of the
+  bytes so far, as `:erlang.crc32/1`.
+
   `compute/2` is the bit-serial reference in plain Elixir; `check/1`
   holds the catalogue check values (CRC of `"123456789"`).
   """
@@ -124,6 +143,30 @@ defmodule ExHdlCores.CRC do
     end)
   end
 
+  @doc """
+  The residue of a CRC: the register (reflected when `refout`, before the
+  final XOR) after a message followed by its own CRC (low byte first when
+  `refout`, high byte first otherwise). Constant for any message; 0xDEBB20E3
+  for CRC-32.
+  """
+  def residue(c) do
+    c = params(c)
+    msg = "123456789"
+    nbytes = div(c.width + 7, 8)
+
+    if rem(c.width, 8) != 0, do: raise(ArgumentError, "residue needs a width multiple of 8")
+
+    crc = compute(c, msg)
+
+    tail =
+      if c.refout,
+        do: <<crc::little-size(8 * nbytes)>>,
+        else: <<crc::big-size(8 * nbytes)>>
+
+    reg = state_of(c, msg <> tail)
+    if c.refout, do: reflect(reg, c.width), else: reg
+  end
+
   @doc "Reverses the low `w` bits of `v`."
   def reflect(v, w),
     do: Enum.reduce(0..(w - 1), 0, fn i, acc -> bor(acc, bsl(band(bsr(v, i), 1), w - 1 - i)) end)
@@ -159,20 +202,35 @@ defmodule ExHdlCores.CRC do
   The CRC module. `params` as in `params/1`; options: `bytes:` (data bus
   bytes, default 1), `keep:` (add the `keep` port, default true when
   `bytes > 1`), `name:` (module name, derived from the parameters by
-  default).
+  default), `clear_port:` (name of the clear input, `:clear`), `state:`
+  (`state` output), `residue:` (`ok` output, `true` for `residue/1`),
+  `zero_keep:` (`:ignore` or `:one_byte`); see the moduledoc.
   """
   def build(params, opts \\ []) do
     c = params(params)
     bytes = Keyword.get(opts, :bytes, 1)
     keep? = Keyword.get(opts, :keep, bytes > 1) and bytes > 1
     w = c.width
+    clear_name = Keyword.get(opts, :clear_port, :clear)
+    zero_one = Keyword.get(opts, :zero_keep, :ignore) == :one_byte
+    state_out? = Keyword.get(opts, :state, false)
+
+    residue =
+      case Keyword.get(opts, :residue, false) do
+        true -> residue(c)
+        false -> nil
+        v when is_integer(v) -> v
+      end
 
     name =
       Keyword.get_lazy(opts, :name, fn ->
         h = fn v -> Integer.to_string(v, 16) end
 
         "crc#{w}_#{h.(c.poly)}_#{h.(c.init)}_#{h.(c.xorout)}_#{if c.refin, do: "r", else: "n"}" <>
-          "#{if c.refout, do: "r", else: "n"}_b#{bytes}#{if keep?, do: "k", else: ""}"
+          "#{if c.refout, do: "r", else: "n"}_b#{bytes}#{if keep?, do: "k", else: ""}" <>
+          "#{if clear_name != :clear, do: "_#{clear_name}", else: ""}" <>
+          "#{if state_out?, do: "_s", else: ""}#{if residue, do: "_o#{h.(residue)}", else: ""}" <>
+          "#{if zero_one, do: "_z1", else: ""}"
       end)
 
     mats = for k <- 1..bytes, into: %{}, do: {k, matrices(c, k)}
@@ -181,9 +239,11 @@ defmodule ExHdlCores.CRC do
       data = input(:data, 8 * bytes)
       keep = if keep?, do: input(:keep, bytes)
       valid = input(:valid, 1)
-      clear = input(:clear, 1)
+      clear = input(clear_name, 1)
       crc = output(:crc, w)
-      state = reg(:state, w, reset: c.init)
+      state_o = if state_out?, do: output(:state, w)
+      ok = if residue, do: output(:ok, 1)
+      state = reg(:state_r, w, reset: c.init)
       fresh = wire(:fresh, mux(clear, const(c.init, w), state))
 
       nexts =
@@ -213,7 +273,7 @@ defmodule ExHdlCores.CRC do
         end
 
       next = wire(:next, next)
-      active = if keep?, do: valid and reduce_or(keep), else: valid
+      active = if keep? and not zero_one, do: valid and reduce_or(keep), else: valid
 
       sync do
         if active do
@@ -224,6 +284,17 @@ defmodule ExHdlCores.CRC do
       end
 
       final = if c.refout, do: cat(for(i <- 0..(w - 1), do: state[i])), else: state
+      # `if` is hardware inside module/3: Elixir `case` for generator decisions
+      case state_o do
+        nil -> nil
+        o -> o <~ final
+      end
+
+      case ok do
+        nil -> nil
+        o -> o <~ (final == residue)
+      end
+
       crc <~ if(c.xorout == 0, do: final, else: bxor(final, c.xorout))
     end
   end

@@ -7,8 +7,10 @@ defmodule ExHdlCores do
   `ExHdl.RTL.Cosim`.
 
     * `ExHdlCores.CRC` - any polynomial, N bytes per cycle, `tkeep`
+    * `ExHdlCores.Checksum` - Internet checksum adder tree
     * `ExHdlCores.FIFO` - synchronous, asynchronous, AXI4-Stream, packet FIFOs
-    * `ExHdlCores.AXIS` - skid buffer, width converters, merge, broadcast, demux
+    * `ExHdlCores.AXIS` - skid buffer, width converters, merge, packet mux, broadcast, demux
+    * `ExHdlCores.AXIL` - AXI4-Lite to cfg bus bridge, 1-to-N interconnect
     * `ExHdlCores.Arbiter` - fixed priority, round robin, packet-aware hold
     * `ExHdlCores.Util` - counter, prescaler, timer, pulse stretcher,
       debouncer, blinker, heartbeat

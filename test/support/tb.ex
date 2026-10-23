@@ -81,6 +81,8 @@ defmodule ExHdlCores.Tb do
 
     * `inputs:` `%{prefix => beats}` - slave ports of the DUT (`prefix_tdata`, ...)
     * `outputs:` list of master port prefixes
+    * `fields:` beat fields driven on the inputs, `out_fields:` those read
+      from the outputs (default: the same)
     * `valid:`/`ready:` - percent of cycles offering / accepting (default 70)
     * `seed:`, `max_cycles:`, `idle:` (cycles without activity after the
       last expected output before stopping, default 30)
@@ -88,7 +90,8 @@ defmodule ExHdlCores.Tb do
     * `pre:` `fn sim, cycle -> sim end` for other inputs
     * `clocks:` `%{prefix => clock_port}` for multi-clock DUTs: a port only
       transfers at events where its clock rises
-    * `watch:` output names summed over all cycles (pulse counters)
+    * `watch:` output names summed over all cycles (pulse counters); `{name, bit}`
+      counts the pulses of one bit of a wider output
 
   Checks the AXI4-Stream rules on every port (tvalid held and payload
   stable until accepted). Returns `%{out: %{prefix => beats}, cycles: n,
@@ -105,6 +108,7 @@ defmodule ExHdlCores.Tb do
     expect = Keyword.get(opts, :expect)
     pre = Keyword.get(opts, :pre, fn sim, _ -> sim end)
     fields = Keyword.get(opts, :fields, [:tdata, :tkeep, :tlast])
+    ofields = Keyword.get(opts, :out_fields, fields)
     clocks = Keyword.get(opts, :clocks)
     watch = Keyword.get(opts, :watch, [])
 
@@ -160,7 +164,7 @@ defmodule ExHdlCores.Tb do
         {out, stall, out_xfer} =
           Enum.reduce(outputs, {st.out, st.stall, 0}, fn p, {out, stall, n} ->
             valid = outs[:"#{p}_tvalid"] == 1
-            beat = Map.new(fields, &{&1, Map.get(outs, :"#{p}_#{&1}")})
+            beat = Map.new(ofields, &{&1, Map.get(outs, :"#{p}_#{&1}")})
 
             if stall[p] != nil and not (valid and beat == stall[p]),
               do:
@@ -185,7 +189,11 @@ defmodule ExHdlCores.Tb do
         busy = in_xfer + out_xfer > 0 or waiting or Enum.any?(todo, fn {_, b} -> b != [] end)
         quiet = if busy, do: 0, else: st.quiet + 1
 
-        watched = Map.new(st.watched, fn {k, v} -> {k, v + outs[k]} end)
+        watched =
+          Map.new(st.watched, fn
+            {{k, bit} = key, v} -> {key, v + (outs[k] >>> bit &&& 1)}
+            {k, v} -> {k, v + outs[k]}
+          end)
 
         st = %{
           st
