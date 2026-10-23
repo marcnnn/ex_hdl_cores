@@ -1,12 +1,12 @@
 defmodule ExHdlCores.CRCCompatTest do
   @moduledoc """
-  # Verilator builds of the 64-bit CRC take over a minute on a loaded host.
-  @moduletag timeout: 600_000
   `ExHdlCores.CRC` configured as ex_net's `ExNet.RTL.CRC32` (`crc32_8` /
   `crc32_64`): same ports, same cycle behaviour. The model is the contract
   of ex_net's own test (reflected register, init 0xFFFFFFFF, outputs show
   the register one cycle after the word), written here independently.
   """
+  # Verilator builds of the 64-bit CRC take over a minute on a loaded host.
+  @moduletag timeout: 600_000
   use ExUnit.Case, async: true
   use ExUnitProperties
 
