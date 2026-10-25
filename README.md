@@ -510,7 +510,7 @@ Latency, from the last sample of the symbol that holds the last code bit
 the Viterbi window needs for a packet, to the first byte of that packet at
 `m_axis` (QPSK 1/2, all 14 packets of the run): 7000 to 10400 clocks, 70 to
 104 us at 100 MHz, a third to half a symbol. The streaming FFT alone is
-about 4100 clocks, the equaliser needs the whole symbol and the Reed-Solomon
+4173 clocks, the equaliser needs the whole symbol and the Reed-Solomon
 decoder the whole codeword (about 480 clocks and 204 bytes). On top of that
 come the Forney deinterleaver's 2244 bytes (11 packets, about 2.2 symbols
 of QPSK 1/2) and the Viterbi window, which are data delays and not part of
