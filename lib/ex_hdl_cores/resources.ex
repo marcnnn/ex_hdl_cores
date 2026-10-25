@@ -57,7 +57,7 @@ defmodule ExHdlCores.Resources do
        AXIL.interconnect(for(i <- 0..7, do: {i * 0x1000, 0x1000}), addr_bits: 16)},
       {"debouncer, 1M cycles", Util.debouncer(1_000_000)},
       {"timer, 32 bit", Util.timer(32)}
-    ]
+    ] ++ ExHdlCores.DVBT.OuterDecoder.resource_instances()
   end
 
   @doc "Runs Yosys for every instance and family (UltraRAM instances only for `xcup`); `{label, family, {:ok, map} | {:error, e}}`."

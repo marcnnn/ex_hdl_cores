@@ -23,6 +23,11 @@ ex_aes67 and ex_pcie (which uses `AXIS.packet_mux/2` and `AXIL.interconnect/2`).
 | `ExHdlCores.ByteShift` | `build/1`: byte-lane barrel shifter (left or right) by a runtime offset, with `tkeep`; `shift/4` for use inside other modules |
 | `ExHdlCores.CommaAligner` | `build/1`: 8b/10b word alignment on a comma (K28.5), the offset freezes while `lock` is high; `ref/2` model |
 | `ExHdlCores.HeaderCapture` | `build/1`: captures the first N bytes of each AXI4-Stream packet into a register while the stream passes unchanged |
+| `ExHdlCores.ConvInterleaver` | `build/1`: Forney convolutional interleaver and deinterleaver for byte streams, any branches and depth, one byte per clock, the delay lines in one block RAM; `model/4` reference |
+| `ExHdlCores.ReedSolomon` | `build/1`: RS decoder for any GF(2^m) code (field polynomial, n, k, first root, root step, shortening), one symbol per clock with several codewords in flight; `dvbt/0` is RS(204, 188) |
+| `ExHdlCores.EnergyDispersal` | `build/1`: DVB energy dispersal descrambler for 188 byte packets; `model/1` reference |
+| `ExHdlCores.DVBT.OuterDecoder` | `build/1`: deinterleaver, Reed-Solomon and descrambler chained as ex_sdr's DVB-T receiver does |
+| `ExHdlCores.GF` | GF(2^m) reference arithmetic and XOR-network expressions (constant and general multipliers, inverse table) |
 | `ExHdlCores.AxisDriver` | test driver: `run/2` frames in, frames out; `drive/2` on a `Sim` or a Verilator `Session`, random `tvalid`/`tready`, protocol checks |
 | `ExHdlCores.FIFO` | `sync_fifo/1`, `async_fifo/1`, `axis/1`, `axis_async/1`, `packet/1` |
 | `ExHdlCores.AXIS` | `skid/1`, `upsize/1`, `downsize/1`, `convert/1`, `merge/2`, `packet_mux/2`, `broadcast/2`, `demux/2` |
@@ -373,13 +378,75 @@ traceback state), 5.0 ns for the ACS (metric, add, compare, select) and
 5.4 ns for the depuncturer's handshake chain: about 170 MHz, so 100 MHz
 and more on a -1 part should close. Not run through Vivado.
 
+### DVB-T outer decoder
+
+Bytes from the Viterbi decoder in, transport stream packets out, bit-exact
+with `ExSdr.DVBT.Receiver.Stream`'s back end (deinterleaver, Reed-Solomon,
+descrambler), at one byte per clock.
+
+```elixir
+OuterDecoder.build()                          # the chain: s_axis -> m_axis, stat_*, realign, aligned
+ConvInterleaver.build(branches: 12, depth: 17, packet: 204, skip: 2244)
+ReedSolomon.dvbt()                            # RS(204, 188), 4 codeword buffers
+ReedSolomon.build(m: 8, field_poly: 0x187, n: 255, k: 223, fcr: 112, prim: 11)   # CCSDS
+EnergyDispersal.build(user: 2)
+```
+
+`ConvInterleaver`: a ring buffer per branch in one memory (1122 bytes for
+DVB, one RAMB18), one address register per branch; a byte reads the oldest
+byte of its ring and is written into that place one cycle later. Options
+`mode:`, `packet:` (generates `tlast`), `framing: true` (`s_axis_tlast`
+restarts the branch counter), `skip:` (drops the zeros of the empty delay
+lines).
+
+`ReedSolomon` (details in the moduledoc): syndromes by Horner's rule while
+the codeword goes into a block RAM ring, inversionless Berlekamp-Massey with
+`t + 1` shared multipliers (3 cycles per iteration, then the error
+evaluator by replaying the discrepancy product), Chien search at one
+position per clock with Forney's algorithm pipelined behind it, error values
+into a second ring, output = data xor error value. Per codeword `tuser` =
+`{corrected, failed}` on every output beat and a `stat_valid` /
+`stat_failed` / `stat_errors` pulse; a failed codeword passes through
+uncorrected. Every stage needs at most one codeword time, so codewords
+follow each other with no gap at the input (4 buffers, latency about 480
+cycles for DVB). Backpressure on the output stalls the input once the
+buffers are full.
+
+`EnergyDispersal`: PRBS `1 + x^14 + x^15`, restarted every 8 packets, sync
+bytes replaced by `0x47`; packets are dropped until a first byte `0xB8`,
+then the group position is counted blindly as the receiver does.
+
+Differences from ex_sdr: none found in tests, except one deliberate corner.
+The locator registers hold `t + 1` coefficients, so a word whose
+Berlekamp-Massey register length exceeds `t` is flagged failed (data
+unchanged) where ex_sdr may say "decoded, 0 corrections" or find roots; it
+takes crafted syndromes (`test/reed_solomon_test.exs` builds one, random
+garbage reaches it about once in 10^5 words).
+
+Tests (BEAM simulator, and Verilator against the BEAM simulator under
+random valid and ready): the deinterleaver and interleaver against
+`ExSdr.Comm.ConvInterleaver` for random lengths, branches 2..6, depths 1..4
+and DVB 12 x 17 with the startup skipped; the descrambler against
+`ExSdr.DVBT.EnergyDispersal` with leading junk packets, `realign` and
+`tuser`; the decoder against `ExSdr.Comm.ReedSolomon.decode/2` on clean,
+1..t error, t + 1 .. 2t + 4 error and garbage words for DVB, a GF(16) code
+(first root 1), a GF(32) code (first root 3, root step 2, shortened) and a
+shortened CCSDS-style code (first root 112, root step 11), plus the
+`decode_all` counts; throughput of back-to-back codewords; the whole chain
+on a scrambled, RS-encoded, interleaved and convolutionally encoded
+transport stream with bursts of code bit errors against
+`Receiver.Stream.push_back/2` (same bytes, same corrected and failed
+counts). A one-off run of 700 mixed DVB words (garbage, 8, 9, 10 to 20 and
+17 errors, parity-only errors) under random valid and ready had no
+mismatch.
+
 ## Resources
 
 Yosys `synth_xilinx` (0.69), no Vivado: LUT counts are Yosys's estimate,
 memory inference is what the tools will do. Reproduce with `mix
 ex_hdl_cores.resources`. The table gives UltraScale+ (`xcup`, e.g. the XCKU3P); the last column
 has the 7-series (`xc7`) LUT and LUTRAM counts where they differ. No
-block uses SRLs or DSPs.
+block uses DSPs; only the Reed-Solomon decoder has SRLs (15, pipeline delays).
 
 | Block | LUT | FF | LUTRAM | RAMB18 | URAM | xc7 LUT / LUTRAM |
 |---|---|---|---|---|---|---|
@@ -414,6 +481,23 @@ block uses SRLs or DSPs.
 | AXI4-Lite interconnect, 1 to 8, 16 bit address | 236 | 23 | 0 | 0 | 0 | same |
 | debouncer, 1M cycles | 10 | 24 | 0 | 0 | 0 | same |
 | timer, 32 bit | 53 | 34 | 0 | 0 | 0 | same |
+| DVB-T deinterleaver I = 12, M = 17, 204 byte packets | 186 | 167 | 0 | 1 | 0 | 178 LUT |
+| RS(204, 188) decoder, 4 codeword buffers | 1639 | 1028 | 0 | 2 | 0 | 1653 LUT |
+| DVB energy dispersal descrambler | 48 | 33 | 0 | 0 | 0 | same |
+| DVB-T outer decoder (the three above chained) | 1903 | 1228 | 0 | 3 | 0 | 1894 LUT |
+
+Timing, estimated only (no place and route): the longest combinational path
+after LUT6 mapping (Yosys `abc -lut 6`, `ltp`, flip-flops and RAM
+outputs as path ends) is 6 LUT levels in the Reed-Solomon decoder (the
+`wp - rp` buffer-full compare through `s_axis_tready` to the
+enable of the syndrome registers), 4 in the deinterleaver and 4 in the
+descrambler; the Galois field multiplier and XOR tree of the
+Berlekamp-Massey lanes and the Chien sums stay within that. With the
+Zynq-7000 -1 model of `ExHdl.Target.Timing` (0.6 ns per level including
+routing) that is about 3.6 ns of logic, 4.5 to 5.5 ns with clock-to-output,
+setup and the fan-out of `acc` (about 150 registers): 180 MHz or better
+for the chain, so 100 MHz on a Zynq-7020 -1 has margin of about 2x. Vivado
+has not run.
 
 ## Development
 
