@@ -27,6 +27,7 @@ ex_aes67 and ex_pcie (which uses `AXIS.packet_mux/2` and `AXIL.interconnect/2`).
 | `ExHdlCores.ReedSolomon` | `build/1`: RS decoder for any GF(2^m) code (field polynomial, n, k, first root, root step, shortening), one symbol per clock with several codewords in flight; `dvbt/0` is RS(204, 188) |
 | `ExHdlCores.EnergyDispersal` | `build/1`: DVB energy dispersal descrambler for 188 byte packets; `model/1` reference |
 | `ExHdlCores.DVBT.OuterDecoder` | `build/1`: deinterleaver, Reed-Solomon and descrambler chained as ex_sdr's DVB-T receiver does |
+| `ExHdlCores.DVBT.Receiver` | `build/1`: the whole DVB-T 2k receiver, sc16 samples in, transport stream out: ex_hdl's OFDM front end with the hardware FFT, FIFO, Viterbi, bit packer and the outer decoder |
 | `ExHdlCores.GF` | GF(2^m) reference arithmetic and XOR-network expressions (constant and general multipliers, inverse table) |
 | `ExHdlCores.AxisDriver` | test driver: `run/2` frames in, frames out; `drive/2` on a `Sim` or a Verilator `Session`, random `tvalid`/`tready`, protocol checks |
 | `ExHdlCores.FIFO` | `sync_fifo/1`, `async_fifo/1`, `axis/1`, `axis_async/1`, `packet/1` |
@@ -439,6 +440,103 @@ transport stream with bursts of code bit errors against
 counts). A one-off run of 700 mixed DVB words (garbage, 8, 9, 10 to 20 and
 17 errors, parity-only errors) under random valid and ready had no
 mismatch.
+
+### DVB-T receiver
+
+sc16 samples in, transport stream packets out, bit-exact with
+`ExSdr.DVBT.Receiver.Stream` (`front_end: :fixed`, `input: :sc16`, given
+`freq_offset`: the first sample starts a superframe, acquisition stays in
+software).
+
+```elixir
+{:ok, d} = ExHdlCores.DVBT.Receiver.build(constellation: :qpsk, code_rate: {1, 2})
+d.module                                   # s_axis (sc16), m_axis (TS bytes), inc / phase0 / load, counters
+{inc, phase0} = ExHdlCores.DVBT.Receiver.phase_words(freq_offset)
+```
+
+Chain: `ExHdl.OFDM.FrontEnd` (correction, guard removal, `ExHdl.FFT`,
+equaliser, cell and bit deinterleavers, one code bit per beat) -> FIFO
+(16384 x 1 bit, one RAMB18) -> `Viterbi.build` with the code rate's
+puncturing pattern, `start: :unknown`, `depth: 128` -> `DVBT.BitPacker`
+(first bit in bit 7, as `Bits.pack`) -> `DVBT.OuterDecoder`. The code bits
+of the front end carry `tlast` per bit interleaver block; it is not passed
+on, so the Viterbi decoder never flushes: it runs the sliding window of
+`Receiver.Stream.push_back/2`, and a window of 128 steps (16 bytes) stays
+inside until more bits arrive. Byte alignment is the same as ex_sdr's: the
+first decoded bit is bit 7 of the first byte, the deinterleaver starts
+with the first byte, the Reed-Solomon codewords are the 204 byte blocks
+from there, and only the descrambler looks for a sync byte (the first
+0xB8, then counting). Nothing is searched in between, so the bytes are
+the same from the same point.
+
+Ports: `s_axis` (`{im, re}` s16, one sample per beat; no `tlast`, the
+radio cannot wait), `inc`, `phase0`, `load` (the frequency correction,
+`phase_words/2`), `m_axis` (188 byte packets, `tlast`, `tuser` = `{corrected,
+failed}`), `realign`, `aligned`, and 32 bit counters `packets` (codewords),
+`rs_failed`, `rs_errors` (ex_sdr's `rs_corrected`), `overflow` (samples
+offered while `s_axis_tready` was low), `blocks`, plus `fifo_level`,
+`fifo_peak`, `viterbi_last` (never rises). Options: `:constellation`,
+`:code_rate`, `:guard` (only `{1, 32}`: `ExSdr.DVBT.OFDM.ofdm/0` has no
+other), `:fifo_depth`, `:slots`, `:spec`, `:name`. Backpressure on `m_axis`
+stalls the chain up to `s_axis`; a stalled sample is a lost sample
+(`overflow`).
+
+Co-simulation (test/dvbt_receiver_test.exs, Verilator, closed loop in
+test/support/dvbt_rx_tb.ex): ExSdr's transmitter and a channel with carrier
+offset 0.37 and noise, 28 symbols of QPSK 1/2 at one sample per 10 clocks
+and bytes accepted every cycle; QPSK 7/8, 16-QAM 2/3 and 64-QAM 3/4 at
+low SNR with random output backpressure (corrected and failed codewords
+in all three, same counts as ex_sdr: the hardware's `rs_errors` and
+`rs_failed` equal `rs_corrected` and `rs_failed` of the stream state);
+64-QAM 7/8. Every run gives the same bytes as `Receiver.Stream.push/2` (no
+flush) on the same samples; the lint of the whole design under `-Wall`.
+
+Throughput. The chain takes 9.14 Msamples/s at a 100 MHz clock (10.94
+clocks per sample) in every mode: with the source as fast as the chain
+accepts samples, the steady state is
+
+| Mode | clocks per symbol | clocks per sample | limit |
+|---|---|---|---|
+| QPSK 1/2 | 3030 | 1.43 | front end, one code bit per clock (3024 per symbol) |
+| 16-QAM 3/4 | 6054 | 2.87 | front end (6048 bits) |
+| 64-QAM 1/2 | 9078 | 4.30 | front end (9072 bits) |
+| 64-QAM 7/8 | 16000 | 7.6 | Viterbi, 2 clocks per decoded bit (7938 bits) |
+
+The symbol takes 23100 clocks at the real rate, so the worst mode uses 70 %.
+At one sample per 10 clocks nothing overflowed in any run; the FIFO peak was
+637 bits for QPSK 1/2 and 3862 for 64-QAM 7/8 of 16384.
+
+Latency, from the last sample of the symbol that holds the last code bit
+the Viterbi window needs for a packet, to the first byte of that packet at
+`m_axis` (QPSK 1/2, all 14 packets of the run): 7000 to 10400 clocks, 70 to
+104 us at 100 MHz, a third to half a symbol. The streaming FFT alone is
+about 4100 clocks, the equaliser needs the whole symbol and the Reed-Solomon
+decoder the whole codeword (about 480 clocks and 204 bytes). On top of that
+come the Forney deinterleaver's 2244 bytes (11 packets, about 2.2 symbols
+of QPSK 1/2) and the Viterbi window, which are data delays and not part of
+the figure above.
+
+Yosys `synth_xilinx` (7-series), whole receiver with the 2048 point FFT:
+
+| Mode | LUT | LUTRAM | SRL | FF | DSP48E1 | RAMB36 equiv. |
+|---|---|---|---|---|---|---|
+| QPSK 1/2 | 7339 | 148 | 605 | 6253 | 52 | 23 (12 RAMB36, 22 RAMB18) |
+| 64-QAM 7/8 | 8071 | 148 | 655 | 6534 | 62 | 23.5 |
+
+Zynq-7020 (53200 LUT, 106400 FF, 140 RAMB36, 220 DSP): QPSK 1/2 is 14 % of
+the LUTs (15 % with LUTRAM and SRL), 5.9 % of the FFs, 16 % of the block RAM
+and 24 % of the DSPs; 64-QAM 7/8 is 15 % (17 %), 6.1 %, 17 % and 28 %. Yosys
+numbers, not Vivado's, and no timing run of the whole design: the parts
+have their own estimates above and in ex_hdl's README (FFT, OFDM), all
+aimed at 100 MHz.
+
+Differences from ex_sdr: the Viterbi tail (see above) stays in the decoder
+at the end of a stream where `Receiver.Stream.flush/1` decodes it; the
+guard interval is fixed at 1/32 (ex_sdr's `ofdm/0` takes no guard); the
+hardware does not chunk (ex_sdr works in groups of 4 symbols, so compare
+at a multiple of 4 symbols). Acquisition, tracking and the choice of
+`inc` / `phase0` are software. A change of code rate or constellation is a
+new build (the tests do not switch at run time).
 
 ## Resources
 

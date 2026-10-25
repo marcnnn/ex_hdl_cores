@@ -92,7 +92,7 @@ defmodule ExHdlCores.DVBT.ReceiverTest do
     # 9.14 Msamples/s at 100 MHz is 10.94 clocks per sample; one sample per 10 clocks here
     {r, _, _, _} = check(:qam64, {7, 8}, 12, snr: 24.0, period: 10, ready: 100)
     assert r.final.overflow == 0
-    assert r.final.fifo_peak < 16_384
+    assert r.final.fifo_peak < 8192
 
     {r, _, _, _} = check(:qam64, {7, 8}, 12, snr: 24.0, period: 1, ready: 100)
     ends = r.symbol_end
