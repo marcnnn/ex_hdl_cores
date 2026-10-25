@@ -126,7 +126,7 @@ defmodule ExHdlCores.ViterbiTest do
     test "throughput at rate 7/8 and 1/2 with an always ready sink" do
       mod = Viterbi.dvbt()
 
-      for {ri, max_clk_per_bit} <- [{4, 2.4}, {0, 3.4}] do
+      for {ri, max_clk_per_bit} <- [{4, 2.4}, {0, 2.9}] do
         s = stream(ri, 2000, 20, 11)
         r = check(mod, [s], 128, valid: 100, ready: 100)
         assert r.cycles / 2000 < max_clk_per_bit

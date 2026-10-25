@@ -41,9 +41,9 @@ defmodule ExHdlCores.Viterbi do
   number on equal metrics), the same tie break in the ACS (the lower
   predecessor), the same windows. Input stalls (`s_axis_tready` low) while
   a traceback is running at a block boundary; the decoded bits wait in two
-  output buffers, so the throughput is `depth` decoded bits per `2 * depth`
-  clocks at most (50 Mbit/s at 100 MHz), and the input takes one code bit
-  per clock.
+  output buffers, so the throughput is at most `depth` decoded bits per `2 * depth`
+  clocks (50 Mbit/s at 100 MHz; rate 1/2 needs 2.5 clocks per bit, the
+  input takes one code bit per clock and the best state scan takes `2^(K - 1)`).
 
   ## Metrics
 
