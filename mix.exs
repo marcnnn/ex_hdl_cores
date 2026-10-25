@@ -22,7 +22,8 @@ defmodule ExHdlCores.MixProject do
   defp deps do
     [
       {:ex_hdl, path: "../exhdl"},
-      {:stream_data, "~> 1.1", only: [:dev, :test]}
+      {:stream_data, "~> 1.1", only: [:dev, :test]},
+      {:ex_sdr, path: "../ex_sdr", only: :test}
     ]
   end
 end
