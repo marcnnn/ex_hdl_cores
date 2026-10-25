@@ -102,7 +102,7 @@ defmodule ExHdlCores.EnergyDispersal do
       aligned_o <~ aligned
 
       sync do
-        if ce, do: out_v <~ acc and not dropping
+        if ce, do: out_v <~ (acc and not dropping)
 
         if acc do
           out_d <~ mux(first, 0x47, prbs)
