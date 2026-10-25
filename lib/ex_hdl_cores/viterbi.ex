@@ -69,11 +69,9 @@ defmodule ExHdlCores.Viterbi do
       value `v` is a soft bit, 0 a sure zero and `2^soft - 1` a sure one;
       the cost of an expected 0 is `v`, of an expected 1 `2^soft - 1 - v`.
       One bit is the hard decision of ex_sdr (cost 1 on a mismatch); more
-      bits have no ex_sdr reference, `model/3` is the reference.
+      bits have no ex_sdr reference, `ref/2` is the reference.
     * `width:` bits of `tdata` on both streams (default 8)
     * `name:`
-
-  Decoding errors cannot occur: any bit stream decodes.
   """
   use ExHdl.RTL
   alias ExHdl.RTL.Builder
