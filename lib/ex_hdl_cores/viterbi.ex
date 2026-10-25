@@ -192,7 +192,8 @@ defmodule ExHdlCores.Viterbi do
         ranks = for j <- 0..(cfg.n - 1), do: Enum.sum(Enum.take(keep, j))
 
         %{
-          keep: keep |> Enum.with_index() |> Enum.reduce(0, fn {b, j}, a -> bor(a, bsl(b, j)) end),
+          keep:
+            keep |> Enum.with_index() |> Enum.reduce(0, fn {b, j}, a -> bor(a, bsl(b, j)) end),
           count: Enum.sum(keep),
           ranks: ranks,
           last: if(p == period - 1, do: 1, else: 0)
@@ -232,6 +233,7 @@ defmodule ExHdlCores.Viterbi do
         for c <- 0..1 do
           {band(bsl(s, 1), smask) + c, branch_pattern(k, cfg.polys, s, c)}
         end
+        |> List.to_tuple()
       end
       |> List.to_tuple()
 
@@ -377,7 +379,7 @@ defmodule ExHdlCores.Viterbi do
       end
 
       keep = wire(:keep, tab.(& &1.keep, n))
-      count = wire(:count, tab.(& &1.count, cw))
+      cm1 = wire(:cm1, tab.(&max(&1.count - 1, 0), cw))
       lastph = wire(:lastph, tab.(& &1.last, 1))
       ranks = for j <- 0..(n - 1), do: tab.(&Enum.at(&1.ranks, j), cw)
 
@@ -392,13 +394,13 @@ defmodule ExHdlCores.Viterbi do
 
       bm_v = reg(:bm_v, 1, reset: 0)
       bm_last = reg(:bm_last, 1, reset: 0)
-      cs = reg(:cs, 2, reset: 0)
+      cs = reg(:cs, 3, reset: 0)
       acs_fire = wire(:acs_fire, bm_v and cs == 0)
       bm_free = wire(:bm_free, not bm_v or acs_fire)
       st_free = wire(:st_free, not st_v or bm_free)
 
       inc = wire(:inc, add_wrap(got, 1))
-      would = wire(:would, inc == count)
+      would = wire(:would, got == cm1)
       s_ready = wire(:s_ready, not tl and (not would or st_free))
       accept = wire(:accept, s_valid and s_ready)
       complete = wire(:complete, accept and would)
@@ -499,8 +501,11 @@ defmodule ExHdlCores.Viterbi do
       blk_end = wire(:blk_end, off == depth - 1)
       stop = wire(:stop, acs_fire and (blk_end or bm_last))
 
-      cur = wire(:cur, mux(scan_i, pm))
-      better = wire(:better, scan_i == 0 or sub_wrap(cur, best_val)[w - 1])
+      # the scan reads one metric per clock into `cur`, compares it a clock later
+      cur = reg(:cur, w, reset: 0)
+      cur_i = reg(:cur_i, k - 1, reset: 0)
+      cur_v = reg(:cur_v, 1, reset: 0)
+      better = wire(:better, cur_i == 0 or sub_wrap(cur, best_val)[w - 1])
 
       # traceback engine
       a_run = reg(:a_run, 1, reset: 0)
@@ -547,16 +552,22 @@ defmodule ExHdlCores.Viterbi do
         end
 
         if cs == 1 do
-          if better do
-            best_val <~ cur
-            best_idx <~ scan_i
-          end
-
+          cur <~ mux(scan_i, pm)
+          cur_i <~ scan_i
           scan_i <~ add_wrap(scan_i, 1)
-          if scan_i == ns - 1, do: cs <~ 2
+          if scan_i == ns - 1, do: cs <~ 4
         end
 
-        if cs == 2 and can_launch, do: cs <~ mux(p_fl, const(3, 2), const(0, 2))
+        cur_v <~ (cs == 1)
+
+        if cur_v and better do
+          best_val <~ cur
+          best_idx <~ cur_i
+        end
+
+        if cs == 4 and not cur_v, do: cs <~ 2
+
+        if cs == 2 and can_launch, do: cs <~ mux(p_fl, const(3, 3), const(0, 3))
 
         if launch_f do
           cs <~ 0
@@ -619,12 +630,13 @@ defmodule ExHdlCores.Viterbi do
       # -- output side ------------------------------------------------------------------
       rd_half = reg(:rd_half, 1, reset: 0)
       rp = reg(:rp, kw, reset: 0)
+      rp1 = reg(:rp1, kw, reset: 1)
       cur_full = wire(:cur_full, mux(rd_half, full))
       cur_len = wire(:cur_len, mux(rd_half, olen))
       cur_last = wire(:cur_last, mux(rd_half, olast))
       m_free = wire(:m_free, not m_valid_o or m_ready)
       load = wire(:load, cur_full and m_free)
-      at_end = wire(:at_end, add_wrap(rp, 1) == cur_len)
+      at_end = wire(:at_end, rp1 == cur_len)
       obit = read_port(obuf, kind: :async, addr: cat([rd_half, rp]))
 
       sync do
@@ -635,10 +647,12 @@ defmodule ExHdlCores.Viterbi do
         end
 
         if load do
-          rp <~ add_wrap(rp, 1)
+          rp <~ rp1
+          rp1 <~ add_wrap(rp1, 1)
 
           if at_end do
             rp <~ 0
+            rp1 <~ 1
             rd_half <~ not rd_half
 
             for h <- 0..1, do: if(rd_half == h, do: Enum.at(full, h) <~ 0)
