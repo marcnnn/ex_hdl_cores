@@ -28,6 +28,7 @@ ex_aes67 and ex_pcie (which uses `AXIS.packet_mux/2` and `AXIL.interconnect/2`).
 | `ExHdlCores.AXIS` | `skid/1`, `upsize/1`, `downsize/1`, `convert/1`, `merge/2`, `packet_mux/2`, `broadcast/2`, `demux/2` |
 | `ExHdlCores.AXIL` | `cfg_bridge/1` (AXI4-Lite to `cfg_we/cfg_sel/cfg_addr/cfg_data` bus), `interconnect/2` (1 master to N slaves by address range) |
 | `ExHdlCores.Arbiter` | `fixed/2`, `round_robin/2` (with optional packet hold) |
+| `ExHdlCores.Viterbi` | `build/1`, `dvbt/1`: streaming Viterbi decoder (K, generators, puncturing patterns, hard or soft bits), bit for bit ex_sdr's streaming decoder; `ref/2` model |
 | `ExHdlCores.Util` | `counter/2`, `prescaler/2`, `timer/2`, `pulse_stretcher/1`, `debouncer/2`, `blinker/3`, `heartbeat/2` |
 
 ```elixir
@@ -303,6 +304,74 @@ patterns (n = 1..7).
 | `Util.heartbeat(step_cycles, pattern:, steps:)` | `out`, a rotating bit pattern (default a double pulse), one step per `step_cycles` |
 
 All with models in `Util.Model`, tested against them with random inputs.
+
+### Viterbi decoder
+
+```elixir
+Viterbi.dvbt()                       # K = 7, 171/133, rates 1/2 2/3 3/4 5/6 7/8, depth 128
+Viterbi.build(k: 7, polys: [0o171, 0o133], depth: 128, puncture: [[[1], [1]]])
+Viterbi.build(k: 5, polys: [0o23, 0o35], soft: 3, start: :unknown)
+```
+
+Ports: `s_axis_tdata` (8 bits, one code bit per beat in the low `soft`
+bits, ex_sdr's 0/1 bytes), `tvalid`, `tready`, `tlast` (last code bit of
+the stream), `s_axis_tuser` (puncturing pattern index of the stream, read
+with its first bit; only with several patterns, `Viterbi.dvbt_rates/0` is
+the order for `dvbt/1`); `m_axis_*` with one decoded bit per beat in bit 0
+and `tlast` on the last bit of the stream.
+
+A stream is what ex_sdr sees from `ExSdr.Comm.Convolutional.decoder/2` to
+`flush/1` (`start:`, `depth:` and the code as parameters): `tlast` flushes,
+completes a puncturing period with erasures, traces back from the best end
+state and resets the decoder for the next stream. The output is the same
+bits, including the first `depth` steps, the window schedule (a traceback
+of `2 * depth` steps from the best state every `depth` steps, the oldest
+`depth` bits issued), the tie breaks (lower predecessor in the ACS, lowest
+state number for the best state) and the flush. The tests compare whole
+streams with ex_sdr's decoder in the BEAM simulator and in Verilator
+(every DVB-T rate, every stream length around the window sizes, noisy and
+pure random input, random valid and ready, back-to-back streams with
+different rates, K = 3, 4 (three outputs), 5, 7 and 9, `start: :unknown`),
+and BEAM against Verilator on random inputs, cycle by cycle.
+
+Structure: a depuncturer (one code bit per clock; the puncturing tables
+select per pattern and phase which outputs of a step are received, the
+others are erasures with branch cost 0), a branch metric register, 64
+parallel radix-2 add-compare-select units (one trellis step per clock when
+the input has the bits), a block RAM of survivor decisions (one 64 bit word
+per step, a ring of `3 * depth` words), a scan for the best end state
+every `depth` steps (`2^(K - 1)` clocks, the ACS waits), and a traceback
+engine at one step per clock with two output buffers (the decoded bits
+come out of the traceback newest first and are written to their place).
+Path metrics are modular and need no normalisation: `w` bits with the
+spread bound `2 * R + 1`, `R = (K - 1) * n * (2^soft - 1)` (6 bits for
+DVB-T). Limitations: one code bit per beat on the input; the throughput is
+`depth` decoded bits per `max(2 * depth, ACS time + 2^(K - 1) + a few)`
+clocks: 2.0 clocks per decoded bit at rates 2/3 to 7/8 and 2.5 at rate
+1/2 (the input takes two clocks per step), measured on 6000 bits: 40 to 50
+Mbit/s decoded at 100 MHz, DVB-T needs at most 34.4 Mbit/s; input stalls while a traceback
+runs, so put a FIFO in front. Soft decisions (`soft: q` bits per code bit,
+0 a sure zero) have no ex_sdr counterpart; `ref/2` is the model (it
+equals ex_sdr on hard bits). The decoder is not resettable per stream
+other than by `tlast`; do not abandon a stream.
+
+Yosys `synth_xilinx` (7-series, no placement), `depth: 128`:
+
+| Instance | LUT | FF | CARRY4 | RAMB36 | LUTRAM |
+|---|---|---|---|---|---|
+| DVB-T, 5 rates (`dvbt/0`) | 1348 | 555 | 407 | 1 | 8 |
+| 1/2 only, no puncturing | 1334 | 548 | 406 | 1 | 8 |
+| DVB-T, `soft: 3` | 2091 | 769 | 604 | 1 | 8 |
+| K = 9, 561/753, rate 1/2 | 5503 | 1966 | 1558 | 4 | 8 |
+
+About 2.5 % of a Zynq-7020's LUTs and one of its 140 block RAM tiles.
+Timing: a netlist walk of the Yosys result (0.46 ns clock to output, 0.12
+ns per LUT, 0.4 ns per carry, 0.5 ns per net, 2.2 ns block RAM clock to
+output, 0.1 ns setup; a coarse model, not Vivado) gives 5.9 ns for the
+longest path (block RAM output through the 64:1 decision select into the
+traceback state), 5.0 ns for the ACS (metric, add, compare, select) and
+5.4 ns for the depuncturer's handshake chain: about 170 MHz, so 100 MHz
+and more on a -1 part should close. Not run through Vivado.
 
 ## Resources
 
