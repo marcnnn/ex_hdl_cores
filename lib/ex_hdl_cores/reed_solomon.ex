@@ -219,7 +219,7 @@ defmodule ExHdlCores.ReedSolomon do
         end
 
       dsum = wire(:dsum, GF.xor_all(lanes))
-      upd = wire(:upd, d != 0 and (l <<< 1) <= r)
+      upd = wire(:upd, d != 0 and l <<< 1 <= r)
       ovf = wire(:ovf, l > t)
 
       deg =
@@ -247,6 +247,7 @@ defmodule ExHdlCores.ReedSolomon do
           r <~ 0
           l <~ 0
           gamma <~ 1
+
           for i <- 0..t do
             Enum.at(lam, i) <~ if(i == 0, do: 1, else: 0)
             Enum.at(bb, i) <~ if(i == 1, do: 1, else: 0)
@@ -319,7 +320,7 @@ defmodule ExHdlCores.ReedSolomon do
 
         if handoff do
           cz_active <~ 1
-          cz_idx <~ len - 1
+          cz_idx <~ (len - 1)
           cz_deg <~ deg
           cz_ovf <~ ovf
           if fcr != 0, do: cz_y <~ 1

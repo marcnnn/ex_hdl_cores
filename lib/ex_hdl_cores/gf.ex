@@ -28,7 +28,8 @@ defmodule ExHdlCores.GF do
       end)
 
     if map_size(log) != size - 1,
-      do: raise(ArgumentError, "GF: 0x#{Integer.to_string(poly, 16)} is not primitive for m = #{m}")
+      do:
+        raise(ArgumentError, "GF: 0x#{Integer.to_string(poly, 16)} is not primitive for m = #{m}")
 
     %__MODULE__{m: m, poly: poly, exp: exp |> Enum.reverse() |> List.to_tuple(), log: log}
   end

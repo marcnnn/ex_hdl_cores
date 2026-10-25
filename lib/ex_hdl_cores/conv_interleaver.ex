@@ -43,7 +43,8 @@ defmodule ExHdlCores.ConvInterleaver do
 
   @doc "Reference: one byte list through the interleaver, delay lines of zeros."
   def model(bytes, i, m, mode \\ :deinterleave) do
-    fifos = for j <- 0..(i - 1), into: %{}, do: {j, List.duplicate(0, branch_delay(i, m, mode, j))}
+    fifos =
+      for j <- 0..(i - 1), into: %{}, do: {j, List.duplicate(0, branch_delay(i, m, mode, j))}
 
     {out, _} =
       bytes
@@ -116,7 +117,9 @@ defmodule ExHdlCores.ConvInterleaver do
       ce = wire(:ce, not out_valid or mo.tready)
       acc = wire(:acc, s.tvalid and ce)
 
-      pad = fn list -> list ++ List.duplicate(List.last(list), Integer.pow(2, jw) - length(list)) end
+      pad = fn list ->
+        list ++ List.duplicate(List.last(list), Integer.pow(2, jw) - length(list))
+      end
 
       cur_addr =
         wire(

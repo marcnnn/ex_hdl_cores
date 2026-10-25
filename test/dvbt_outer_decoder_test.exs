@@ -82,14 +82,25 @@ defmodule ExHdlCores.DVBT.OuterDecoderTest do
     assert r.watched.stat_errors == 0
 
     # packets of 188 bytes with tlast, flags clear
-    assert Enum.map(ByteStream.packets(r.out.m_axis), &byte_size(elem(&1, 0))) == List.duplicate(188, 29)
+    assert Enum.map(ByteStream.packets(r.out.m_axis), &byte_size(elem(&1, 0))) ==
+             List.duplicate(188, 29)
+
     assert Enum.all?(r.out.m_axis, &(&1.tuser == 0))
   end
 
   test "errors after the Viterbi decoder: corrected and failed packets, as the receiver" do
     # a few short bursts (corrected by the code or the Viterbi decoder) and heavy ones
     # that break several Reed-Solomon codewords
-    bursts = [{500, 12}, {9000, 30}, {20_000, 150}, {52_000, 400}, {80_000, 9}, {100_000, 600}, {60_000, 4000}]
+    bursts = [
+      {500, 12},
+      {9000, 30},
+      {20_000, 150},
+      {52_000, 400},
+      {80_000, 9},
+      {100_000, 600},
+      {60_000, 4000}
+    ]
+
     c = channel(40, 2, bursts)
     {expected, corrected, failed} = receiver(c.code_bits)
     assert corrected > 0 and failed > 0, "the test needs both: #{corrected} #{failed}"
@@ -109,7 +120,16 @@ defmodule ExHdlCores.DVBT.OuterDecoderTest do
   test "Verilator equals the BEAM simulator on the whole chain" do
     c = channel(16, 5, [{3000, 80}, {40_000, 1500}])
     bytes = c.viterbi
-    opts = [valid: 85, ready: 75, seed: 7, fields: [:tdata], out_fields: [:tdata, :tlast, :tuser], idle: 500]
+
+    opts = [
+      valid: 85,
+      ready: 75,
+      seed: 7,
+      fields: [:tdata],
+      out_fields: [:tdata, :tlast, :tuser],
+      idle: 500
+    ]
+
     mod = OuterDecoder.build()
     beats = ByteStream.beats([bytes], last: false)
     a = ByteStream.run(mod, beats, opts)

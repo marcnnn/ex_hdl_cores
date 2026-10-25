@@ -26,7 +26,12 @@ defmodule ExHdlCores.ReedSolomonTest do
       ByteStream.run(
         mod,
         beats(words),
-        [fields: [:tdata], out_fields: [:tdata, :tlast, :tuser], watch: [:stat_valid, :stat_failed, :stat_errors], idle: 600] ++
+        [
+          fields: [:tdata],
+          out_fields: [:tdata, :tlast, :tuser],
+          watch: [:stat_valid, :stat_failed, :stat_errors],
+          idle: 600
+        ] ++
           opts
       )
 
@@ -52,7 +57,8 @@ defmodule ExHdlCores.ReedSolomonTest do
     expected = Enum.map(words, &RsCases.expect(code, &1))
     assert length(got) == count
 
-    for {{msg, failed, corrected}, {emsg, efailed, errors}, i} <- Enum.zip([got, expected, 0..count]) do
+    for {{msg, failed, corrected}, {emsg, efailed, errors}, i} <-
+          Enum.zip([got, expected, 0..count]) do
       assert {i, msg, failed, corrected} == {i, emsg, efailed, errors > 0}
     end
 
@@ -91,7 +97,12 @@ defmodule ExHdlCores.ReedSolomonTest do
 
   describe "DVB-T RS(204, 188)" do
     test "words against ex_sdr's decode, with the corrected and failed counts of decode_all" do
-      code = RsCases.code(@codes[:ccsds] |> Keyword.merge(field_poly: 0x11D, fcr: 0, prim: 1, shortening: 51))
+      code =
+        RsCases.code(
+          @codes[:ccsds]
+          |> Keyword.merge(field_poly: 0x11D, fcr: 0, prim: 1, shortening: 51)
+        )
+
       :rand.seed(:exsss, {7, 8, 9})
       words = RsCases.batch(code, 36, 7)
       {got, r} = hw(ReedSolomon.dvbt(), code, words, valid: 100, ready: 100)
@@ -106,7 +117,12 @@ defmodule ExHdlCores.ReedSolomonTest do
     end
 
     test "sustains one byte per clock: back-to-back codewords, no gap on the input" do
-      code = RsCases.code(@codes[:ccsds] |> Keyword.merge(field_poly: 0x11D, fcr: 0, prim: 1, shortening: 51))
+      code =
+        RsCases.code(
+          @codes[:ccsds]
+          |> Keyword.merge(field_poly: 0x11D, fcr: 0, prim: 1, shortening: 51)
+        )
+
       words = RsCases.batch(code, 12, 11)
       {got, r} = hw(ReedSolomon.dvbt(), code, words, valid: 100, ready: 100)
       assert length(got) == 12
@@ -125,7 +141,10 @@ defmodule ExHdlCores.ReedSolomonTest do
 
     rows =
       Enum.reduce(0..(n - 1), rows, fn col, rows ->
-        {pivot, rest} = Enum.split_with(Enum.drop(rows, col), &(Enum.at(&1, col) != 0)) |> then(fn {p, r} -> {hd(p), tl(p) ++ r} end)
+        {pivot, rest} =
+          Enum.split_with(Enum.drop(rows, col), &(Enum.at(&1, col) != 0))
+          |> then(fn {p, r} -> {hd(p), tl(p) ++ r} end)
+
         inv = GF.divide(f, 1, Enum.at(pivot, col))
         pivot = Enum.map(pivot, &GF.mul(f, &1, inv))
         top = Enum.take(rows, col)
@@ -166,7 +185,16 @@ defmodule ExHdlCores.ReedSolomonTest do
     code = RsCases.code(opts)
     mod = ReedSolomon.build(opts)
     words = RsCases.batch(code, 14, 21)
-    run = [valid: 80, ready: 60, seed: 5, fields: [:tdata], out_fields: [:tdata, :tlast, :tuser], idle: 300]
+
+    run = [
+      valid: 80,
+      ready: 60,
+      seed: 5,
+      fields: [:tdata],
+      out_fields: [:tdata, :tlast, :tuser],
+      idle: 300
+    ]
+
     a = ByteStream.run(mod, beats(words), run)
     b = ByteStream.run(mod, beats(words), run ++ [backend: :verilator])
     assert a.out == b.out

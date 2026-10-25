@@ -19,7 +19,9 @@ defmodule ExHdlCores.EnergyDispersalTest do
   # junk packets whose first byte is not the inverted sync
   defp junk(n, seed) do
     :rand.seed(:exsss, {seed, 5, 6})
-    for _ <- 1..n//1, do: <<Enum.random(Enum.to_list(0..255) -- [0xB8]), :rand.bytes(187)::binary>>
+
+    for _ <- 1..n//1,
+        do: <<Enum.random(Enum.to_list(0..255) -- [0xB8]), :rand.bytes(187)::binary>>
   end
 
   test "the model is ex_sdr's descrambler" do
@@ -32,9 +34,19 @@ defmodule ExHdlCores.EnergyDispersalTest do
     plain = ts(4, 2)
     scrambled = Ref.scramble(plain)
     assert binary_part(scrambled, 0, 1) == <<0xB8>>
-    r = ByteStream.run(EnergyDispersal.build(), ByteStream.beats(packets(scrambled)), valid: 100, ready: 100, idle: 5)
+
+    r =
+      ByteStream.run(EnergyDispersal.build(), ByteStream.beats(packets(scrambled)),
+        valid: 100,
+        ready: 100,
+        idle: 5
+      )
+
     assert :binary.list_to_bin(ByteStream.bytes(r)) == plain
-    assert Enum.map(ByteStream.packets(r.out.m_axis), &byte_size(elem(&1, 0))) == List.duplicate(188, 32)
+
+    assert Enum.map(ByteStream.packets(r.out.m_axis), &byte_size(elem(&1, 0))) ==
+             List.duplicate(188, 32)
+
     assert r.cycles <= byte_size(plain) + 2 + 5
   end
 
@@ -62,7 +74,13 @@ defmodule ExHdlCores.EnergyDispersalTest do
           ""
         end
 
-      r = ByteStream.run(EnergyDispersal.build(), ByteStream.beats(stream), valid: vp, ready: rp, seed: seed)
+      r =
+        ByteStream.run(EnergyDispersal.build(), ByteStream.beats(stream),
+          valid: vp,
+          ready: rp,
+          seed: seed
+        )
+
       assert :binary.list_to_bin(ByteStream.bytes(r)) == expected
     end
   end
@@ -83,7 +101,15 @@ defmodule ExHdlCores.EnergyDispersalTest do
 
     stream = pkts ++ pkts
     beats = ByteStream.beats(stream, extra: %{tuser: 0})
-    r = ByteStream.run(mod, beats, fields: [:tdata, :tlast, :tuser], valid: 100, ready: 100, pre: pre)
+
+    r =
+      ByteStream.run(mod, beats,
+        fields: [:tdata, :tlast, :tuser],
+        valid: 100,
+        ready: 100,
+        pre: pre
+      )
+
     out = :binary.list_to_bin(ByteStream.bytes(r))
     assert out == plain <> binary_part(plain, 0, 188) <> binary_part(plain, 8 * 188, 8 * 188)
   end

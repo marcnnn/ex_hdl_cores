@@ -29,6 +29,17 @@ defmodule ExHdlCores.DVBT.OuterDecoder do
   use ExHdl.RTL
   alias ExHdlCores.{AXIS, ConvInterleaver, EnergyDispersal, ReedSolomon}
 
+  @doc "`{label, module}` of the blocks of the chain for the resource table (`ExHdlCores.Resources`)."
+  def resource_instances do
+    [
+      {"Forney deinterleaver I = 12, M = 17, 204 byte packets (DVB-T)",
+       ConvInterleaver.build(branches: 12, depth: 17, packet: 204, skip: 2244)},
+      {"Reed-Solomon RS(204, 188) decoder, 4 codeword buffers", ReedSolomon.dvbt()},
+      {"DVB energy dispersal descrambler", EnergyDispersal.build(user: 2)},
+      {"DVB-T outer decoder (deinterleaver, RS, descrambler)", build()}
+    ]
+  end
+
   @doc "Elaborated chain; options `slots:` (Reed-Solomon codeword buffers, default 4)."
   def build(opts \\ []) do
     slots = Keyword.get(opts, :slots, 4)

@@ -4,7 +4,8 @@ defmodule ExHdlCores.RsCases do
   import Bitwise
   alias ExSdr.Comm.ReedSolomon, as: RS
 
-  def code(opts), do: RS.new(Keyword.take(opts, [:m, :field_poly, :n, :k, :fcr, :prim, :shortening]))
+  def code(opts),
+    do: RS.new(Keyword.take(opts, [:m, :field_poly, :n, :k, :fcr, :prim, :shortening]))
 
   @doc "A codeword (list of symbols) with `nerr` errors at random positions of the transmitted word."
   def word(code, nerr, kind \\ :random) do

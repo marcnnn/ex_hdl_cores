@@ -60,7 +60,13 @@ defmodule ExHdlCores.ConvInterleaverTest do
     mod = ConvInterleaver.build(branches: 12, depth: 17, packet: 204, skip: 2244)
     :rand.seed(:exsss, {5, 6, 7})
     bytes = for _ <- 1..(204 * 30), do: :rand.uniform(256) - 1
-    r = ByteStream.run(mod, ByteStream.beats([:binary.list_to_bin(bytes)], last: false), valid: 80, ready: 60)
+
+    r =
+      ByteStream.run(mod, ByteStream.beats([:binary.list_to_bin(bytes)], last: false),
+        valid: 80,
+        ready: 60
+      )
+
     expected = bytes |> ref(12, 17, :deinterleave) |> Enum.drop(2244)
     assert ByteStream.bytes(r) == expected
 
@@ -79,7 +85,9 @@ defmodule ExHdlCores.ConvInterleaverTest do
   # branch counter restarts at each tlast, the delay lines go on
   defp framed_ref(packets, i, m, mode) do
     fifos =
-      for j <- 0..(i - 1), into: %{}, do: {j, List.duplicate(0, ConvInterleaver.branch_delay(i, m, mode, j))}
+      for j <- 0..(i - 1),
+          into: %{},
+          do: {j, List.duplicate(0, ConvInterleaver.branch_delay(i, m, mode, j))}
 
     {out, _} =
       Enum.flat_map_reduce(packets, fifos, fn p, fifos ->
@@ -110,7 +118,9 @@ defmodule ExHdlCores.ConvInterleaverTest do
       mod = ConvInterleaver.build(branches: i, depth: m, framing: true)
       r = ByteStream.run(mod, ByteStream.beats(pkts), valid: 70, ready: 70, seed: seed)
       assert ByteStream.bytes(r) == framed_ref(pkts, i, m, :deinterleave)
-      assert Enum.map(ByteStream.packets(r.out.m_axis), &byte_size(elem(&1, 0))) == Enum.map(pkts, &byte_size/1)
+
+      assert Enum.map(ByteStream.packets(r.out.m_axis), &byte_size(elem(&1, 0))) ==
+               Enum.map(pkts, &byte_size/1)
     end
   end
 

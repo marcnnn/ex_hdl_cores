@@ -60,7 +60,11 @@ defmodule ExHdlCores.ByteStream do
         cur = [b | cur]
 
         if b.tlast == 1,
-          do: {[{cur |> Enum.reverse() |> Enum.map(& &1.tdata) |> :binary.list_to_bin(), hd(cur)} | pkts], []},
+          do:
+            {[
+               {cur |> Enum.reverse() |> Enum.map(& &1.tdata) |> :binary.list_to_bin(), hd(cur)}
+               | pkts
+             ], []},
           else: {pkts, cur}
       end)
 
