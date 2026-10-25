@@ -19,9 +19,10 @@ defmodule ExHdlCores.ReedSolomon do
   bit 1 at least one symbol corrected). A failed codeword (more than
   `(n - k) / 2` errors, or a locator that does not have as many roots as
   its degree inside the transmitted part) goes through uncorrected. The
-  statistics pulse `stat_valid` when the last symbol of a codeword is
-  transferred, with `stat_failed` and `stat_errors` (symbols corrected, 0
-  when failed) valid in that cycle.
+  statistics pulse `stat_valid` in the cycle the last symbol of a codeword is
+  transferred; `stat_failed` (1 for a failed codeword) and `stat_errors`
+  (symbols corrected, 0 when failed) are 0 in every other cycle, so they
+  can be summed into counters.
 
   Structure, per codeword (every stage takes at most `n - shortening`
   cycles, so a new codeword can start every `n - shortening` cycles with no
@@ -43,11 +44,15 @@ defmodule ExHdlCores.ReedSolomon do
   The decision rule is that of the reference: failed when the locator
   degree exceeds `t` or the number of roots among the transmitted
   positions differs from the degree (a root in the shortened part is such a
-  case). One deliberate difference: a locator whose Berlekamp-Massey
-  register length `L` exceeds `t` is failed even if its degree is at most
-  `t`. That needs syndromes like `(0, ..., 0, s)` (an error pattern of
-  weight more than `t` that no locator of degree `t` explains); the
-  reference reports such a word as decoded without corrections.
+  case). One deliberate difference: the locator registers hold `t + 1`
+  coefficients, so a word whose Berlekamp-Massey register length `L`
+  exceeds `t` is failed even if the reference ends up with a locator of
+  degree at most `t`. The data is passed on uncorrected in that case too;
+  the flags differ only when the reference reports "decoded, 0 corrections"
+  or finds a full set of roots. That needs contrived syndromes (for random
+  garbage about 1 word in 10^5 reaches `L > t` with a short locator, and
+  one in 10^9 or fewer then also passes the root test); the test builds one
+  from `(0, s, 0, ..., 0, s', 0, ...)`.
 
   Backpressure: `s_axis_tready` drops when all buffers hold codewords that
   have not been read out or the previous syndromes wait for the
@@ -411,9 +416,10 @@ defmodule ExHdlCores.ReedSolomon do
       mo.tdata <~ if(dw == m, do: fixed, else: zext(fixed, dw))
       mo.tlast <~ last1o
       mo.tuser <~ cat([not f1 and e1 != 0, f1])
-      stat_valid <~ (v1o and last1o and mo.tready)
-      stat_failed <~ f1
-      stat_errors <~ mux(f1, 0, e1)
+      done = wire(:done, v1o and last1o and mo.tready)
+      stat_valid <~ done
+      stat_failed <~ (done and f1)
+      stat_errors <~ mux(done and not f1, e1, 0)
     end
   end
 end
