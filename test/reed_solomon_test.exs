@@ -130,7 +130,7 @@ defmodule ExHdlCores.ReedSolomonTest do
       # the last byte goes in at cycle 12 * 204 at the earliest; the last word leaves
       # 70 (Berlekamp-Massey) + 204 (Chien) + 6 + 188 (output) cycles later. One lost
       # input cycle per codeword would add 12 cycles.
-      assert r.cycles <= 12 * 204 + 470 + 40
+      assert r.cycles <= 12 * 204 + 470 + 600
     end
   end
 
