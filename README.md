@@ -17,10 +17,13 @@ ex_aes67 and ex_pcie (which uses `AXIS.packet_mux/2` and `AXIL.interconnect/2`).
 
 | Module | Blocks |
 |---|---|
-| `ExHdlCores.CRC` | `build/2`: any width, polynomial, reflection, init, final XOR; N bytes per cycle with `tkeep`; options that make it a drop-in for ex_net's `crc32_8` / `crc32_64` |
+| `ExHdlCores.CRC` | `build/2`: any width, polynomial, reflection, init, final XOR; N bytes per cycle with `tkeep`; `next/5` and `final/2` for an inline step inside another module; options that make it a drop-in for ex_net's `crc32_8` / `crc32_64` |
 | `ExHdlCores.Checksum` | `build/1`: Internet checksum (RFC 1071) adder tree over N-byte words with `tkeep`; `window/3` and `fold/1` for use inside other modules |
 | `ExHdlCores.Scrambler` | `build/1`: self-synchronising scrambler, descrambler and additive PRBS over N-bit words for any tap list; `matrix/3` turns any linear step function into an XOR network |
 | `ExHdlCores.ByteShift` | `build/1`: byte-lane barrel shifter (left or right) by a runtime offset, with `tkeep`; `shift/4` for use inside other modules |
+| `ExHdlCores.CommaAligner` | `build/1`: 8b/10b word alignment on a comma (K28.5), the offset freezes while `lock` is high; `ref/2` model |
+| `ExHdlCores.HeaderCapture` | `build/1`: captures the first N bytes of each AXI4-Stream packet into a register while the stream passes unchanged |
+| `ExHdlCores.AxisDriver` | test driver: `run/2` frames in, frames out; `drive/2` on a `Sim` or a Verilator `Session`, random `tvalid`/`tready`, protocol checks |
 | `ExHdlCores.FIFO` | `sync_fifo/1`, `async_fifo/1`, `axis/1`, `axis_async/1`, `packet/1` |
 | `ExHdlCores.AXIS` | `skid/1`, `upsize/1`, `downsize/1`, `convert/1`, `merge/2`, `packet_mux/2`, `broadcast/2`, `demux/2` |
 | `ExHdlCores.AXIL` | `cfg_bridge/1` (AXI4-Lite to `cfg_we/cfg_sel/cfg_addr/cfg_data` bus), `interconnect/2` (1 master to N slaves by address range) |

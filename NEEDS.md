@@ -104,3 +104,38 @@ outputs (`ports: []`) and by omitting FIFO count outputs when unused.
   instance name must not equal the prefix of the re-exported ports
   (`output(:x_y, 1) <~ i.y` for instance `x` raises `x_y is declared
   twice`). An `expose/2` helper would remove both.
+
+## Migration of local copies to the shared blocks
+
+The sibling repos were not edited. Steps for their owners:
+
+* **ex_net, MAC CRC** (`ExNet.RTL.CRC32.next/3`, `next_keep/4`):
+  `ExHdlCores.CRC.next(:crc32, state, data, keep, bytes)` is the same
+  expression (`keep` is `nil` for a full word); `CRC.final(:crc32, state)`
+  gives `crc`. Note the `zero_keep: :one_byte` behaviour of `ExNet.RTL.CRC32`
+  is the standalone module's option; inline, `keep = 0` selects nothing, so
+  OR a 1 into `keep[0]` (`keep ||| 1`) where the MAC relied on it. Then
+  `ExNet.RTL.CRC32` reduces to `build/1` (already a `CRC.build` call) and
+  `ExNet.CRC32.matrices/1` can go.
+* **ex_net, 1000BASE-X** (`ExNet.RTL.PCS1000X.build_rx/0`): replace the
+  `p1`/`p2`/`shift_r`/`algn` block by `instance(:u_align,
+  CommaAligner.build())` with `code <- rx_code10`, `lock <- sync` (the
+  core's registered `sync`; it feeds back, so keep the `sync` signal
+  declared before the instance), `aligned -> core code`, `shift -> shift`.
+  Same latency (`aligned` is the `algn` register).
+* **ex_net, tests**: `test/support/axis_source.ex` (`ExNet.AxisSource`)
+  becomes `ExHdlCores.AxisDriver.run/2`; its `plan` with gaps and aborts
+  (underrun) is not covered, keep that part locally or drive `drive/2`
+  with beats whose `tvalid` the test shapes through `pre:`. `Tb.drive/2`
+  style loops elsewhere become `AxisDriver.drive/2`.
+* **ex_net, `ExNet.RTL.Classifier`**: the 12 beat `hdr0..hdr11` capture
+  becomes `HeaderCapture.build(header: 90, data: 64)` (`hdr`, `hdr_len`,
+  `hdr_valid`, `hdr_start` replace the local index and event wires).
+  The 14 stage delay line and the result ring stay local (a packet FIFO
+  with the verdict as sideband would replace them; not part of this block).
+* **ex_ptp / ex_aes67 / ex_pcie**: no local copies of these four found
+  (grep for `comma`, `hdr` capture, `axis_source`); the test driver is
+  usable for their stream tests as well.
+
+Not done: the classifier delay line, checksum tree (see `Checksum`) and
+byte shifters (see `ByteShift`) were already shared earlier.

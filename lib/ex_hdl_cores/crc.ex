@@ -40,6 +40,10 @@ defmodule ExHdlCores.CRC do
   `crc` is the complemented reflected register, i.e. the CRC-32 of the
   bytes so far, as `:erlang.crc32/1`.
 
+  Inside another module (a MAC that keeps the register in its own state)
+  use `next/5` for the step and `final/2` for the output; both are plain
+  expressions, no instance. `build/2` is made of them.
+
   `compute/2` is the bit-serial reference in plain Elixir; `check/1`
   holds the catalogue check values (CRC of `"123456789"`).
   """
@@ -199,6 +203,87 @@ defmodule ExHdlCores.CRC do
   # -- hardware --------------------------------------------------------------------------
 
   @doc """
+  Next-state expression for use inside another module (a MAC that keeps
+  the CRC register in its own state): the combinational step of `build/2`.
+
+  `state` is the register (width of the CRC, Rocksoft notation as
+  `build/2`'s `state_r`), `data` has `8 * bytes` bits. `keep` is `nil` for
+  a full word, or the `tkeep` expression (`bytes` bits, the highest set
+  bit gives the byte count of a partial word). `params` as in `params/1`.
+  The result is the register value after the word; the caller decides
+  when to load it (and starts from `init/1` after a frame). The
+  expression has no registers, so it can sit in a `wire/2` or directly in
+  a `sync` block.
+
+      st = reg(:crc, 32, reset: CRC.init(:crc32))
+      sync do
+        if start, do: st <~ CRC.next(:crc32, const(CRC.init(:crc32), 32), data, keep, 8)
+        if valid, do: st <~ CRC.next(:crc32, st, data, keep, 8)
+      end
+
+  Replaces `ExNet.RTL.CRC32.next/3` and `next_keep/4` (ex_net MACs,
+  `ExNet.RTL.MacRx` / `MacTx`): `CRC.next(:crc32, state, data, keep, bytes)`.
+  """
+  def next(params, state, data, keep, bytes) do
+    c = params(params)
+    mats = for k <- 1..bytes, into: %{}, do: {k, matrices(c, k)}
+    next_with(c, mats, state, data, keep, bytes)
+  end
+
+  @doc "The initial register value (`init`) of the parameters."
+  def init(params), do: params(params).init
+
+  @doc """
+  CRC value from a state register expression: reflection and final XOR
+  applied, as the `crc` output of `build/2`. `refout: true` reverses the
+  bit order, so the result of `final(:crc32, state)` is `:erlang.crc32/1`
+  of the bytes so far.
+  """
+  def final(params, state) do
+    c = params(params)
+    w = c.width
+
+    rtl do
+      f = if c.refout, do: cat(for(i <- 0..(w - 1), do: state[i])), else: state
+      if c.xorout == 0, do: f, else: bxor(f, c.xorout)
+    end
+  end
+
+  defp next_with(c, mats, state, data, keep, bytes) do
+    w = c.width
+
+    nexts =
+      for k <- 1..bytes do
+        %{state: sm, data: dm} = mats[k]
+
+        rtl do
+          dk = data[0..(8 * k - 1)]
+
+          bits =
+            for j <- (w - 1)..0//-1 do
+              bxor(reduce_xor(state &&& Enum.at(sm, j)), reduce_xor(dk &&& Enum.at(dm, j)))
+            end
+
+          cat(bits)
+        end
+      end
+
+    case keep do
+      nil ->
+        List.last(nexts)
+
+      keep ->
+        # the highest set bit of keep gives the byte count
+        nexts
+        |> Enum.with_index(1)
+        |> Enum.reduce(nil, fn
+          {n, 1}, nil -> n
+          {n, k}, acc -> rtl(do: mux(keep[k - 1], n, acc))
+        end)
+    end
+  end
+
+  @doc """
   The CRC module. `params` as in `params/1`; options: `bytes:` (data bus
   bytes, default 1), `keep:` (add the `keep` port, default true when
   `bytes > 1`), `name:` (module name, derived from the parameters by
@@ -246,32 +331,7 @@ defmodule ExHdlCores.CRC do
       state = reg(:state_r, w, reset: c.init)
       fresh = wire(:fresh, mux(clear, const(c.init, w), state))
 
-      nexts =
-        for k <- 1..bytes do
-          %{state: sm, data: dm} = mats[k]
-          dk = data[0..(8 * k - 1)]
-
-          bits =
-            for j <- (w - 1)..0//-1 do
-              bxor(reduce_xor(fresh &&& Enum.at(sm, j)), reduce_xor(dk &&& Enum.at(dm, j)))
-            end
-
-          cat(bits)
-        end
-
-      next =
-        if keep? do
-          # the highest set bit of keep gives the byte count
-          nexts
-          |> Enum.with_index(1)
-          |> Enum.reduce(nil, fn
-            {n, 1}, nil -> n
-            {n, k}, acc -> mux(keep[k - 1], n, acc)
-          end)
-        else
-          List.last(nexts)
-        end
-
+      next = next_with(c, mats, fresh, data, if(keep?, do: keep), bytes)
       next = wire(:next, next)
       active = if keep? and not zero_one, do: valid and reduce_or(keep), else: valid
 
