@@ -18,8 +18,7 @@ defmodule ExHdlCores.DVBTRxTb do
   """
   def signal(constellation, rate, symbols, opts \\ []) do
     o = [constellation: constellation, code_rate: rate, guard_interval: {1, 32}, cell_id: 0]
-    # whole 126-word blocks of the bit interleaver: 168 packets (QPSK, 16-QAM), 504 (64-QAM)
-    ts = TestSignal.ts_packets(if constellation == :qam64, do: 504, else: 168)
+    ts = TestSignal.ts_packets(packets(constellation, rate))
     cfo = Keyword.get(opts, :cfo, 0.37)
 
     x =
@@ -31,6 +30,17 @@ defmodule ExHdlCores.DVBTRxTb do
       |> Channel.awgn(Keyword.get(opts, :snr, 12.0), 42)
 
     {FixedFrontEnd.to_sc16(x, 0.47), cfo}
+  end
+
+  # the smallest whole number of groups of 8 packets (at least 160) whose code bits fill whole
+  # 126-word blocks of the bit interleaver, as the transmitter needs
+  defp packets(constellation, {num, den}) do
+    v = %{qpsk: 2, qam16: 4, qam64: 6}[constellation]
+
+    Enum.find(160..100_000//8, fn p ->
+      info = p * 204 * 8
+      rem(info * den, num) == 0 and rem(div(info * den, num), 126 * v) == 0
+    end)
   end
 
   @doc "Transport stream bytes, RS corrected (symbol errors) and failed of the software receiver; no flush."
