@@ -107,32 +107,30 @@ outputs (`ports: []`) and by omitting FIFO count outputs when unused.
 
 ## Migration of local copies to the shared blocks
 
-The sibling repos were not edited. Steps for their owners:
+ex_net was migrated (ex_net commit "Use shared CRC.next/5, CommaAligner and
+HeaderCapture ..."); notes from doing it:
 
-* **ex_net, MAC CRC** (`ExNet.RTL.CRC32.next/3`, `next_keep/4`):
-  `ExHdlCores.CRC.next(:crc32, state, data, keep, bytes)` is the same
-  expression (`keep` is `nil` for a full word); `CRC.final(:crc32, state)`
-  gives `crc`. Note the `zero_keep: :one_byte` behaviour of `ExNet.RTL.CRC32`
-  is the standalone module's option; inline, `keep = 0` selects nothing, so
-  OR a 1 into `keep[0]` (`keep ||| 1`) where the MAC relied on it. Then
-  `ExNet.RTL.CRC32` reduces to `build/1` (already a `CRC.build` call) and
-  `ExNet.CRC32.matrices/1` can go.
-* **ex_net, 1000BASE-X** (`ExNet.RTL.PCS1000X.build_rx/0`): replace the
-  `p1`/`p2`/`shift_r`/`algn` block by `instance(:u_align,
-  CommaAligner.build())` with `code <- rx_code10`, `lock <- sync` (the
-  core's registered `sync`; it feeds back, so keep the `sync` signal
-  declared before the instance), `aligned -> core code`, `shift -> shift`.
-  Same latency (`aligned` is the `algn` register).
-* **ex_net, tests**: `test/support/axis_source.ex` (`ExNet.AxisSource`)
-  becomes `ExHdlCores.AxisDriver.run/2`; its `plan` with gaps and aborts
-  (underrun) is not covered, keep that part locally or drive `drive/2`
-  with beats whose `tvalid` the test shapes through `pre:`. `Tb.drive/2`
-  style loops elsewhere become `AxisDriver.drive/2`.
-* **ex_net, `ExNet.RTL.Classifier`**: the 12 beat `hdr0..hdr11` capture
-  becomes `HeaderCapture.build(header: 90, data: 64)` (`hdr`, `hdr_len`,
-  `hdr_valid`, `hdr_start` replace the local index and event wires).
-  The 14 stage delay line and the result ring stay local (a packet FIFO
-  with the verdict as sideband would replace them; not part of this block).
+* **MAC CRC**: done. `CRC.next/5` works on the Rocksoft register, not on
+  ex_net's reflected one: the MAC register is the bit reverse, so `fcs`
+  is `CRC.final(:crc32, state)` (not `~~~state`) and the residue
+  comparison uses `CRC.reflect(CRC.residue(:crc32), 32)`. The note about
+  `keep ||| 1` was not needed: the inline expression already treats an
+  all-zero `keep` as one byte (the lowest lane is the base case). Wanted:
+  say so in the `next/5` doc, and that `state` is not the reflected
+  register.
+* **1000BASE-X**: done as described (`lock <- signal(:sync)` after the
+  core is built); latency identical, tests and Verilator cosim unchanged.
+* **Classifier**: done with `header: 96` (12 beats), not 90, so the
+  parser keeps `len` and `more` exactly. `HeaderCapture` has no event
+  pulse: `hdr_valid` stays high for one beat packets and never falls
+  between back to back ones; ex_net builds the pulse from
+  `hdr_valid and (hdr_start or not hdr_valid_d)` and gets "the frame went
+  on" from the `tlast` of the last accepted beat. Wanted: an `hdr_event`
+  pulse output (one cycle, every packet) and a `hdr_more` flag.
+* **AxisDriver**: not adopted in ex_net. Its tests need the cycle exact
+  closed loop with gaps and underrun aborts and read GMII/XGMII traces
+  (`RtlCase.drive`), while `AxisDriver` offers random `tvalid` and
+  collects frames on stream sinks.
 * **ex_ptp / ex_aes67 / ex_pcie**: no local copies of these four found
   (grep for `comma`, `hdr` capture, `axis_source`); the test driver is
   usable for their stream tests as well.
