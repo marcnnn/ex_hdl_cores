@@ -609,3 +609,7 @@ mix ex_hdl_cores.resources       # regenerate the resource table
 `mix test` runs about 1 minute, most of it Yosys (`:yosys`) and the first
 Verilator builds (cached under `_build/<env>/ex_hdl_sim`). `NEEDS.md`
 lists what the RTL DSL still lacks, with reproducers.
+
+## License
+
+Apache-2.0, see `LICENSE`.
