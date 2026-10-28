@@ -599,8 +599,10 @@ has not run.
 
 ## Development
 
+Sibling libraries come from a checkout next to this one when there is one
+(`../exhdl` for ex_hdl, `../<name>` for the others), otherwise from GitHub.
+
 ```sh
-./scripts/checkout_siblings.sh   # path dependencies (../exhdl, ../nx_fixed)
 mix test                         # BEAM tests; Verilator and Yosys tests run when installed
 mix test --only verilator        # co-simulation and lint only
 mix ex_hdl_cores.resources       # regenerate the resource table
