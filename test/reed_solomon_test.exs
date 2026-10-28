@@ -160,8 +160,8 @@ defmodule ExHdlCores.ReedSolomonTest do
     Enum.map(rows, &List.last/1)
   end
 
-  test "syndromes whose Berlekamp-Massey length exceeds t with locator degree 0: data passes, flagged failed (documented difference)" do
-    # S_1 and S_8 only: L = 9 but the locator is 1, which ex_sdr reports as decoded with no corrections
+  test "syndromes whose Berlekamp-Massey length exceeds t with locator degree 0: data passes, flagged failed as in ex_sdr" do
+    # S_1 and S_8 only: L = 9 but the locator is 1; both fail the word
     s = [0, 223, 0, 0, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 0]
     f = GF.new(8, 0x11D)
     # errors at the last 16 symbols (powers 0..15): S_i = sum e_p alpha^(p i)
@@ -172,7 +172,7 @@ defmodule ExHdlCores.ReedSolomonTest do
     cw = RsCases.word(code, 0)
     errors = List.duplicate(0, 188) ++ Enum.reverse(e)
     word = Enum.zip_with(cw, errors, &Bitwise.bxor/2)
-    assert {:ok, _, 0} = ExSdr.Comm.ReedSolomon.decode(code, word)
+    assert {:error, :uncorrectable, _} = ExSdr.Comm.ReedSolomon.decode(code, word)
     {[{msg, failed, corrected}], _} = hw(ReedSolomon.dvbt(), code, [word])
     assert msg == Enum.take(word, 188)
     assert failed

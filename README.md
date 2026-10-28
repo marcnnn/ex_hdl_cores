@@ -417,12 +417,11 @@ buffers are full.
 bytes replaced by `0x47`; packets are dropped until a first byte `0xB8`,
 then the group position is counted blindly as the receiver does.
 
-Differences from ex_sdr: none found in tests, except one deliberate corner.
-The locator registers hold `t + 1` coefficients, so a word whose
-Berlekamp-Massey register length exceeds `t` is flagged failed (data
-unchanged) where ex_sdr may say "decoded, 0 corrections" or find roots; it
-takes crafted syndromes (`test/reed_solomon_test.exs` builds one, random
-garbage reaches it about once in 10^5 words).
+Differences from ex_sdr: none found in tests. The locator registers hold
+`t + 1` coefficients, so a word whose Berlekamp-Massey register length
+exceeds `t` is flagged failed (data unchanged), as ex_sdr does too; it takes
+crafted syndromes (`test/reed_solomon_test.exs` builds one, random garbage
+reaches it about once in 10^5 words).
 
 Tests (BEAM simulator, and Verilator against the BEAM simulator under
 random valid and ready): the deinterleaver and interleaver against
